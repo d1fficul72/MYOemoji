@@ -1,14 +1,5 @@
-[build]
-builder = "NIXPACKS"
-
-[python]
-version = "3.11"
+[deploy]
+startCommand = "python botEmoji.py"
 
 [variables]
-PYTHONUNBUFFERED = "1"
-
-[phases.setup]
-nixPkgs = ["ffmpeg"]
-
-[start]
-cmd = "botEmoji.py"
+RAILPACK_DEPLOY_APT_PACKAGES = "ffmpeg"
