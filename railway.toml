@@ -8,7 +8,7 @@ version = "3.11"
 PYTHONUNBUFFERED = "1"
 
 [phases.setup]
-nixPkgs = ["ffmpeg"]
+RAILPACK_DEPLOY_APT_PACKAGES
 
 [start]
-cmd = "botEmoji.py"
+cmd = "python botEmoji.py"
