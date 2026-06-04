@@ -482,6 +482,7 @@ def main():
         },
         fallbacks=[CommandHandler("start", cmd_start)],
         allow_reentry=True,
+        per_message=False,
     )
 
     app.add_handler(conv)
