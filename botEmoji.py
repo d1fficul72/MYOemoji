@@ -49,9 +49,23 @@ def log_action(user, action: str):
 BOT_TOKEN        = os.environ["BOT_TOKEN"]
 STICKER_SIZE     = 100      # кастомные эмодзи 100×100px
 MAX_STICKERS     = 120
-GRID_OPTIONS     = [5, 8, 10]
+MAX_COLS         = 13       # максимум 13 эмодзи вширь (лимит экрана телефона)
 MAX_VIDEO_FRAMES = 15
 MAX_VIDEO_SEC    = 3.0
+
+# (cols, rows) — варианты сеток
+GRID_OPTIONS = [
+    (5,  5),
+    (8,  5),
+    (10, 5),
+    (13, 5),
+    (8,  8),
+    (10, 8),
+    (13, 8),
+    (10, 10),
+    (13, 10),
+    (13, 13),
+]
 
 WAIT_FILE, WAIT_GRID, WAIT_PACK_NAME = range(3)
 
@@ -60,13 +74,13 @@ WAIT_FILE, WAIT_GRID, WAIT_PACK_NAME = range(3)
 #  УТИЛИТЫ: изображение
 # ══════════════════════════════════════════════════════════════════════════
 
-def slice_image(img: Image.Image, grid: int) -> list:
+def slice_image(img: Image.Image, cols: int, rows: int) -> list:
     img = img.convert("RGBA").resize(
-        (grid * STICKER_SIZE, grid * STICKER_SIZE), Image.LANCZOS
+        (cols * STICKER_SIZE, rows * STICKER_SIZE), Image.LANCZOS
     )
     cells = []
-    for row in range(grid):
-        for col in range(grid):
+    for row in range(rows):
+        for col in range(cols):
             box = (
                 col * STICKER_SIZE, row * STICKER_SIZE,
                 (col + 1) * STICKER_SIZE, (row + 1) * STICKER_SIZE,
@@ -139,17 +153,18 @@ def read_frames_pillow(path: Path):
     return frames, fps
 
 
-def split_frames_to_cells(frames: list, grid: int) -> list:
-    """Нарезает список кадров на grid*grid ячеек. Возвращает list of list."""
-    size = grid * STICKER_SIZE
-    cells = [[] for _ in range(grid * grid)]
+def split_frames_to_cells(frames: list, cols: int, rows: int) -> list:
+    """Нарезает список кадров на cols×rows ячеек."""
+    w = cols * STICKER_SIZE
+    h = rows * STICKER_SIZE
+    cells = [[] for _ in range(cols * rows)]
     for frame in frames:
-        r = cv2.resize(frame, (size, size))
-        for row in range(grid):
-            for col in range(grid):
+        r = cv2.resize(frame, (w, h))
+        for row in range(rows):
+            for col in range(cols):
                 y0, y1 = row * STICKER_SIZE, (row + 1) * STICKER_SIZE
                 x0, x1 = col * STICKER_SIZE, (col + 1) * STICKER_SIZE
-                cells[row * grid + col].append(r[y0:y1, x0:x1])
+                cells[row * cols + col].append(r[y0:y1, x0:x1])
     return cells
 
 
@@ -324,23 +339,36 @@ async def handle_file(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     ctx.user_data["is_video"]  = is_video
     log_action(update.effective_user, f"загрузил файл: {fname}")
 
-    grid_btns = [
-        [InlineKeyboardButton(f"{g}×{g}  —  {g*g} эмодзи", callback_data=f"grid_{g}")]
-        for g in GRID_OPTIONS
-    ]
+    grid_btns = []
+    for cols, rows in GRID_OPTIONS:
+        total = cols * rows
+        if total > MAX_STICKERS:
+            continue
+        label = f"{cols}×{rows}  —  {total} эмодзи"
+        if cols == MAX_COLS:
+            label += "  📱 на всю ширину"
+        grid_btns.append([InlineKeyboardButton(label, callback_data=f"grid_{cols}_{rows}")])
     grid_btns.append([InlineKeyboardButton("← Назад", callback_data="back_menu")])
-    await msg.reply_text("✅ Файл получен! Выбери размер сетки:", reply_markup=InlineKeyboardMarkup(grid_btns))
+    await msg.reply_text(
+        "✅ Файл получен! Выбери размер сетки:\n"
+        "📱 13 эмодзи вширь = вся ширина экрана телефона",
+        reply_markup=InlineKeyboardMarkup(grid_btns)
+    )
     return WAIT_GRID
 
 
 async def btn_grid(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await q.answer()
-    grid = int(q.data.split("_")[1])
-    ctx.user_data["grid"] = grid
-    log_action(q.from_user, f"выбрал сетку {grid}×{grid}")
+    parts = q.data.split("_")   # grid_13_8
+    cols, rows = int(parts[1]), int(parts[2])
+    ctx.user_data["cols"] = cols
+    ctx.user_data["rows"] = rows
+    total = cols * rows
+    log_action(q.from_user, f"выбрал сетку {cols}×{rows}")
+    note = "📱 вся ширина экрана телефона" if cols == MAX_COLS else ""
     await q.edit_message_text(
-        f"📐 Сетка {grid}×{grid} ({grid*grid} эмодзи).\n\nВведи название для эмодзи-пака:",
+        f"📐 Сетка {cols}×{rows} ({total} эмодзи). {note}\n\nВведи название для эмодзи-пака:",
         reply_markup=back_kb()
     )
     return WAIT_PACK_NAME
@@ -348,7 +376,9 @@ async def btn_grid(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 async def handle_pack_name(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     title   = update.message.text.strip()[:64]
-    grid    = ctx.user_data["grid"]
+    cols    = ctx.user_data["cols"]
+    rows    = ctx.user_data["rows"]
+    total   = cols * rows
     file_id = ctx.user_data["file_id"]
     fname   = ctx.user_data["file_name"]
     mode    = ctx.user_data.get("mode", "mode_image")
@@ -357,7 +387,7 @@ async def handle_pack_name(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
 
     await update.message.reply_text(
-        f"⏳ Создаю эмодзи-пак «{title}» ({grid}×{grid})...\nЭто может занять от 30 секунд до нескольких минут."
+        f"⏳ Создаю эмодзи-пак «{title}» ({cols}×{rows})...\nЭто может занять от 30 секунд до нескольких минут."
     )
 
     tmp_dir = Path(tempfile.mkdtemp())
@@ -443,7 +473,7 @@ def main():
             ],
             WAIT_GRID: [
                 CallbackQueryHandler(btn_back, pattern="^back_menu$"),
-                CallbackQueryHandler(btn_grid, pattern=r"^grid_\d+$"),
+                CallbackQueryHandler(btn_grid, pattern=r"^grid_\d+_\d+$"),
             ],
             WAIT_PACK_NAME: [
                 CallbackQueryHandler(btn_back, pattern="^back_menu$"),
